@@ -1,9 +1,9 @@
 import base64
-import datetime
 import logging
 import time
 
 from collections import OrderedDict
+from datetime import datetime
 
 from OpenSSL import crypto
 from construct import (
@@ -20,6 +20,9 @@ from construct import (
     Terminated,
     Embedded,
 )
+
+from typing import Any
+from OpenSSL.crypto import X509, X509Name
 
 
 MerkleTreeHeader = Struct(
@@ -40,12 +43,12 @@ CertificateChain = Struct(
 PreCertEntry = Struct("LeafCert" / Certificate, Embedded(CertificateChain), Terminated)
 
 
-def dump_extensions(certificate):
-    extensions = {}
+def dump_extensions(certificate: X509) -> list[str]:
+    extensions: dict[str, Any] = {}
     for x in range(certificate.get_extension_count()):
-        extension_name = ""
+        extension_name: str = ""
         try:
-            extension_name = certificate.get_extension(x).get_short_name()
+            extension_name: bytes = certificate.get_extension(x).get_short_name()
 
             if extension_name == b"UNDEF":
                 continue
@@ -61,12 +64,12 @@ def dump_extensions(certificate):
     return extensions
 
 
-def serialize_certificate(certificate):
-    subject = certificate.get_subject()
-    not_before_datetime = datetime.datetime.strptime(
+def serialize_certificate(certificate: X509) -> dict[str, Any]:
+    subject: X509Name = certificate.get_subject()
+    not_before_datetime: datetime = datetime.strptime(
         certificate.get_notBefore().decode("ascii"), "%Y%m%d%H%M%SZ"
     )
-    not_after_datetime = datetime.datetime.strptime(
+    not_after_datetime: datetime = datetime.strptime(
         certificate.get_notAfter().decode("ascii"), "%Y%m%d%H%M%SZ"
     )
     return {
@@ -90,14 +93,14 @@ def serialize_certificate(certificate):
     }
 
 
-def add_all_domains(cert_data):
-    all_domains = []
+def add_all_domains(cert_data: dict[str, Any]) -> dict[str, Any]:
+    all_domains: list[str] = []
 
     # Apparently we have certificates with null CNs....what?
     if cert_data["leaf_cert"]["subject"]["CN"]:
         all_domains.append(cert_data["leaf_cert"]["subject"]["CN"])
 
-    subject_alternative_name = cert_data["leaf_cert"]["extensions"].get(
+    subject_alternative_name: str = cert_data["leaf_cert"]["extensions"].get(
         "subjectAltName"
     )
 
@@ -111,25 +114,26 @@ def add_all_domains(cert_data):
     return cert_data
 
 
-def parse_ctl_entry(entry, operator_information):
-    mtl = MerkleTreeHeader.parse(base64.b64decode(entry["leaf_input"]))
+def parse_ctl_entry(
+    entry: dict[str, Any], operator_information: dict[str, Any]
+) -> dict[str, Any]:
+    mtl: Any = MerkleTreeHeader.parse(base64.b64decode(entry["leaf_input"]))
 
-    cert_data = {}
-
+    cert_data: dict[str, Any] = {}
     if mtl.LogEntryType == "X509LogEntryType":
         cert_data["update_type"] = "X509LogEntry"
-        chain = [
+        chain: list[X509] = [
             crypto.load_certificate(
                 crypto.FILETYPE_ASN1, Certificate.parse(mtl.Entry).CertData
             )
         ]
-        extra_data = CertificateChain.parse(base64.b64decode(entry["extra_data"]))
+        extra_data: Any = CertificateChain.parse(base64.b64decode(entry["extra_data"]))
         for cert in extra_data.Chain:
             chain.append(crypto.load_certificate(crypto.FILETYPE_ASN1, cert.CertData))
     else:
         cert_data["update_type"] = "PreCertEntry"
         extra_data = PreCertEntry.parse(base64.b64decode(entry["extra_data"]))
-        chain = [
+        chain: list[X509] = [
             crypto.load_certificate(crypto.FILETYPE_ASN1, extra_data.LeafCert.CertData)
         ]
 

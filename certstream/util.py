@@ -1,21 +1,23 @@
-from datetime import datetime
+from datetime import datetime, timedelta
+from aiohttp.web_urldispatcher import Response
 
 
-def pretty_date(time=False):
+def pretty_date(time: bool | int | datetime = False) -> str:
     """
     Get a datetime object or a int() Epoch timestamp and return a
     pretty string like 'an hour ago', 'Yesterday', '3 months ago',
     'just now', etc
     """
-    now = datetime.now()
+    now: datetime = datetime.now()
+    diff: timedelta
     if type(time) is int:
         diff = now - datetime.fromtimestamp(time)
     elif isinstance(time, datetime):
         diff = now - time
     elif not time:
         diff = now - now
-    second_diff = diff.seconds
-    day_diff = diff.days
+    second_diff: int = diff.seconds
+    day_diff: int = diff.days
 
     if day_diff < 0:
         return ""
@@ -44,13 +46,12 @@ def pretty_date(time=False):
     return str(day_diff / 365) + " years ago"
 
 
-def get_ip(request):
+def get_ip(request: Response) -> str:
     peer_info = request.transport.get_extra_info("peername")
 
     ip = "UNKNOWN"
-
     if peer_info is not None:
-        ip, port, _, _ = peer_info
+        ip, _, __, ___ = peer_info
 
     if "X-Forwarded-For" in request.headers:
         ip = request.headers.get("X-Forwarded-For")

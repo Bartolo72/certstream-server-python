@@ -24,19 +24,14 @@ def run():
     watcher = TransparencyWatcher(loop)
     webserver = WebServer(loop, watcher)
 
-    # Start watcher tasks
-    for task in watcher.get_tasks():
-        loop.create_task(task)
-
-    # Run the web server (non-blocking)
-    webserver.run_server()
+    asyncio.gather(*watcher.get_tasks(), *webserver.get_tasks())
 
     try:
         loop.run_forever()
     except KeyboardInterrupt:
         logging.info("Shutting down CertStream...")
     finally:
-        loop.close()
+        loop.stop()
 
 
 if __name__ == "__main__":

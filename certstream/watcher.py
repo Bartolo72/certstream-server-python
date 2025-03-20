@@ -6,13 +6,17 @@ import requests
 import sys
 import os
 
+from asyncio import AbstractEventLoop, Queue, Task
+from logging import Logger
+from typing import Any, AsyncGenerator
+
 from certstream.certlib import parse_ctl_entry
 
 
 class TransparencyWatcher(object):
     # These are a list of servers that we shouldn't even try to connect to. In testing they either had bad
     # DNS records, resolved to un-routable IP addresses, or didn't have valid SSL certificates.
-    BAD_CT_SERVERS = [
+    BAD_CT_SERVERS: list[str] = [
         "alpha.ctlogs.org",
         "clicky.ct.letsencrypt.org",
         "ct.akamai.com",
@@ -35,27 +39,27 @@ class TransparencyWatcher(object):
         "www.certificatetransparency.cn/ct",
     ]
 
-    MAX_BLOCK_SIZE = 64
+    MAX_BLOCK_SIZE: int = 64
 
-    def __init__(self, _loop):
-        self.loop = _loop
-        self.stopped = False
-        self.logger = logging.getLogger("certstream.watcher")
-
-        self.stream = asyncio.Queue(maxsize=3000)
-
+    def __init__(self: "TransparencyWatcher", _loop: AbstractEventLoop) -> None:
+        self.loop: AbstractEventLoop = _loop
+        self.stopped: bool = False
+        self.logger: Logger = logging.getLogger("certstream.watcher")
+        self.stream: Queue = Queue(maxsize=3000)
         self.logger.info("Initializing the CTL watcher")
 
-    def _initialize_ts_logs(self):
+    def _initialize_ts_logs(self: "TransparencyWatcher") -> None:
         try:
-            self.transparency_logs = requests.get(
+            self.transparency_logs: dict[str, Any] = requests.get(
                 "https://www.gstatic.com/ct/log_list/v3/all_logs_list.json"
             ).json()
             # https://www.gstatic.com/ct/log_list/all_logs_list.json is not available anymore
             # https://www.gstatic.com/ct/log_list/v3/all_logs_list.json use this instead
 
         except Exception as e:
-            self.logger.fatal("Invalid response from certificate directory! Exiting :(")
+            self.logger.fatal(
+                f"Invalid response from certificate directory! Exiting :(\nError: {str(e)}"
+            )
             sys.exit(1)
 
         for operator in self.transparency_logs["operators"]:
@@ -67,7 +71,7 @@ class TransparencyWatcher(object):
                     entry["url"] = entry["url"][:-1]
                 self.logger.info(f"  + {entry['description']}")
 
-    async def _print_memory_usage(self):
+    async def _print_memory_usage(self: "TransparencyWatcher") -> None:
         import objgraph
         import gc
 
@@ -77,10 +81,10 @@ class TransparencyWatcher(object):
             objgraph.show_growth()
             await asyncio.sleep(60)
 
-    def get_tasks(self):
+    def get_tasks(self: "TransparencyWatcher") -> list[Task]:
         self._initialize_ts_logs()
 
-        coroutines = []
+        coroutines: list[Task] = []
 
         if os.getenv("DEBUG_MEMORY", False):
             coroutines.append(self._print_memory_usage())
@@ -92,22 +96,22 @@ class TransparencyWatcher(object):
 
         return coroutines
 
-    def stop(self):
+    def stop(self: "TransparencyWatcher") -> None:
         self.logger.info("Got stop order, exiting...")
         self.stopped = True
-        for task in asyncio.Task.all_tasks():
-            task.cancel()
 
-    async def watch_for_updates_task(self, operator_information):
+    async def watch_for_updates_task(
+        self: "TransparencyWatcher", operator_information: dict[str, Any]
+    ) -> None:
         try:
-            latest_size = 0
-            name = operator_information["description"]
+            latest_size: int = 0
+            name: str = operator_information["description"]
             while not self.stopped:
-                url = f"{operator_information['url']}/ct/v1/get-sth"
+                url: str = f"{operator_information['url']}/ct/v1/get-sth"
                 try:
                     async with aiohttp.ClientSession(loop=self.loop) as session:
                         async with session.get(url) as response:
-                            info = await response.json()
+                            info: dict[str, Any] = await response.json()
                 except aiohttp.ClientError as e:
                     self.logger.info(
                         f"[{name}] Exception when connecting to: {url} -> {e}"
@@ -115,7 +119,7 @@ class TransparencyWatcher(object):
                     await asyncio.sleep(600)
                     continue
 
-                tree_size = info.get("tree_size")
+                tree_size: int = info.get("tree_size")
 
                 # TODO: Add in persistence and id tracking per log
                 if latest_size == 0:
@@ -131,7 +135,9 @@ class TransparencyWatcher(object):
                             operator_information, latest_size, tree_size
                         ):
                             for entry in result_chunk:
-                                cert_data = parse_ctl_entry(entry, operator_information)
+                                cert_data: dict[str, Any] = parse_ctl_entry(
+                                    entry, operator_information
+                                )
                                 await self.stream.put(cert_data)
 
                     except aiohttp.ClientError as e:
@@ -156,14 +162,17 @@ class TransparencyWatcher(object):
             print(f"Encountered an exception while getting new results! -> {e}")
             return
 
-    async def get_new_results(self, operator_information, latest_size, tree_size):
+    async def get_new_results(
+        self: "TransparencyWatcher",
+        operator_information: dict[str, Any],
+        latest_size: int,
+        tree_size: int,
+    ) -> AsyncGenerator[list[dict[str, Any]], None]:
         # The top of the tree isn't actually a cert yet, so the total_size is what we're aiming for
-        total_size = tree_size - latest_size
-        start = latest_size
-
-        end = start + self.MAX_BLOCK_SIZE
-
-        chunks = math.ceil(total_size / self.MAX_BLOCK_SIZE)
+        total_size: int = tree_size - latest_size
+        start: int = latest_size
+        end: int = start + self.MAX_BLOCK_SIZE
+        chunks: int = math.ceil(total_size / self.MAX_BLOCK_SIZE)
 
         self.logger.info(
             f"Retrieving {tree_size - latest_size} certificates ({latest_size} -> {tree_size}) for {operator_information['description']}"
@@ -177,10 +186,11 @@ class TransparencyWatcher(object):
                 assert end >= start, f"End {end} is less than start {start}!"
                 assert end < tree_size, f"End {end} is less than tree_size {tree_size}"
 
-                url = f"{operator_information['url']}/ct/v1/get-entries?start={start}&end={end}"
-
+                url: str = (
+                    f"{operator_information['url']}/ct/v1/get-entries?start={start}&end={end}"
+                )
                 async with session.get(url) as response:
-                    certificates = await response.json()
+                    certificates: dict[str, Any] = await response.json()
                     if "error_message" in certificates:
                         print("error!")
 
@@ -199,7 +209,7 @@ class TransparencyWatcher(object):
 class DummyTransparencyWatcher(object):
     stream = asyncio.Queue()
 
-    def get_tasks(self):
+    def get_tasks(self: "DummyTransparencyWatcher") -> list[Task]:
         return []
 
 
