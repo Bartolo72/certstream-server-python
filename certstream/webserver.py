@@ -5,7 +5,6 @@ import logging
 import os
 import time
 import ssl
-
 from aiohttp import web
 from aiohttp.web_urldispatcher import Response
 from aiohttp.web_ws import WebSocketResponse
@@ -13,11 +12,10 @@ from aiohttp.web_ws import WebSocketResponse
 from certstream.util import pretty_date, get_ip
 
 WebsocketClientInfo = collections.namedtuple(
-    'WebsocketClientInfo',
-    ['external_ip', 'queue', 'connection_time']
+    "WebsocketClientInfo", ["external_ip", "queue", "connection_time"]
 )
 
-STATIC_INDEX = '''
+STATIC_INDEX = f"""
 <!DOCTYPE html>
 <html>
   <head>
@@ -27,55 +25,56 @@ STATIC_INDEX = '''
   </head>
   <body>
     <div id="app"></div>
-  <script type="text/javascript" src="https://storage.googleapis.com/certstream-prod/build.js?v={}"></script></body>
+  <script type="text/javascript" src="https://storage.googleapis.com/certstream-prod/build.js?v={time.time()}"></script></body>
 </html>
-'''.format(time.time())
+"""
+
 
 class WebServer(object):
     def __init__(self, _loop, transparency_watcher):
         self.active_sockets = []
         self.recently_seen = collections.deque(maxlen=25)
-        self.stats_url = os.getenv("STATS_URL", 'stats')
-        self.logger = logging.getLogger('certstream.webserver')
+        self.stats_url = os.getenv("STATS_URL", "stats")
+        self.logger = logging.getLogger("certstream.webserver")
 
         self.loop = _loop
         self.watcher = transparency_watcher
 
-        self.app = web.Application(loop=self.loop)
+        self.app = web.Application()
 
         self._add_routes()
 
     def run_server(self):
-        self.mux_stream = asyncio.ensure_future(self.mux_ctl_stream())
-        self.heartbeat_coro = asyncio.ensure_future(self.ws_heartbeats())
+        self.loop.create_task(self.mux_ctl_stream())
+        self.loop.create_task(self.ws_heartbeats())
 
         if os.environ.get("NOSSL", False):
             ssl_ctx = None
         else:
             ssl_ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-            ssl_ctx.load_cert_chain(certfile=os.getenv("SERVER_CERT", "server.crt"), keyfile=os.getenv("SERVER_KEY", "server.key"))
+            ssl_ctx.load_cert_chain(
+                certfile=os.getenv("SERVER_CERT", "server.crt"),
+                keyfile=os.getenv("SERVER_KEY", "server.key"),
+            )
 
-        web.run_app(
-            self.app,
-            port=int(os.environ.get('PORT', 8080)),
-            ssl_context=ssl_ctx
+        self.loop.run_until_complete(
+            web._run_app(
+                self.app, port=int(os.environ.get("PORT", 8080)), ssl_context=None
+            )
         )
 
     def _add_routes(self):
         self.app.router.add_get("/latest.json", self.latest_json_handler)
         self.app.router.add_get("/example.json", self.example_json_handler)
-        self.app.router.add_get("/{}".format(self.stats_url), self.stats_handler)
-        self.app.router.add_get('/', self.root_handler)
-        self.app.router.add_get('/develop', self.dev_handler)
+        self.app.router.add_get(f"/{self.stats_url}", self.stats_handler)
+        self.app.router.add_get("/", self.root_handler)
+        self.app.router.add_get("/develop", self.dev_handler)
 
     async def mux_ctl_stream(self):
         while True:
             cert_data = await self.watcher.stream.get()
 
-            data_packet = {
-                "message_type": "certificate_update",
-                "data": cert_data
-            }
+            data_packet = {"message_type": "certificate_update", "data": cert_data}
 
             self.recently_seen.append(data_packet)
 
@@ -84,7 +83,6 @@ class WebServer(object):
                     client.queue.put_nowait(data_packet)
                 except asyncio.QueueFull:
                     pass
-
 
     async def dev_handler(self, request):
         # If we have a websocket request
@@ -98,7 +96,7 @@ class WebServer(object):
                     message_json = json.dumps(message)
                     await ws.send_str(message_json)
             except asyncio.CancelledError:
-                print('websocket cancelled')
+                print("websocket cancelled")
 
             await ws.close()
 
@@ -106,10 +104,7 @@ class WebServer(object):
 
         return web.Response(
             body=json.dumps(
-                {
-                    "error": "Please use this url with a websocket client!"
-                },
-                indent=4
+                {"error": "Please use this url with a websocket client!"}, indent=4
             ),
             content_type="application/json",
         )
@@ -131,7 +126,7 @@ class WebServer(object):
         )
 
         try:
-            self.logger.info('Client {} joined.'.format(client.external_ip))
+            self.logger.info(f"Client {client.external_ip} joined.")
             self.active_sockets.append(client)
             while True:
                 message = await client_queue.get()
@@ -140,16 +135,11 @@ class WebServer(object):
 
         finally:
             self.active_sockets.remove(client)
-            self.logger.info('Client {} disconnected.'.format(client.external_ip))
+            self.logger.info(f"Client {client.external_ip} disconnected.")
 
     async def latest_json_handler(self, _):
         return web.Response(
-            body=json.dumps(
-                {
-                    "messages": list(self.recently_seen)
-                },
-                indent=4
-            ),
+            body=json.dumps({"messages": list(self.recently_seen)}, indent=4),
             headers={"Access-Control-Allow-Origin": "*"},
             content_type="application/json",
         )
@@ -165,13 +155,13 @@ class WebServer(object):
             return web.Response(
                 body="{}",
                 headers={"Access-Control-Allow-Origin": "*"},
-                content_type="application/json"
+                content_type="application/json",
             )
 
     async def stats_handler(self, _):
         clients = {}
         for client in self.active_sockets:
-            client_identifier = "{}-{}".format(client.external_ip, client.connection_time)
+            client_identifier = f"{client.external_ip}-{client.connection_time}"
             clients[client_identifier] = {
                 "ip_address": client.external_ip,
                 "conection_time": client.connection_time,
@@ -180,10 +170,12 @@ class WebServer(object):
             }
 
         return web.Response(
-            body=json.dumps({
+            body=json.dumps(
+                {
                     "connected_client_count": len(self.active_sockets),
-                    "clients": clients
-                }, indent=4
+                    "clients": clients,
+                },
+                indent=4,
             ),
             content_type="application/json",
         )
@@ -195,13 +187,14 @@ class WebServer(object):
             self.logger.debug("Sending ping...")
             timestamp = time.time()
             for client in self.active_sockets:
-                await client.queue.put({
-                    "message_type": "heartbeat",
-                    "timestamp": timestamp
-                })
+                await client.queue.put(
+                    {"message_type": "heartbeat", "timestamp": timestamp}
+                )
+
 
 if __name__ == "__main__":
     from certstream.watcher import TransparencyWatcher
+
     loop = asyncio.get_event_loop()
     watcher = TransparencyWatcher(loop)
     webserver = WebServer(loop, watcher)

@@ -1,5 +1,6 @@
 from datetime import datetime
 
+
 def pretty_date(time=False):
     """
     Get a datetime object or a int() Epoch timestamp and return a
@@ -17,7 +18,7 @@ def pretty_date(time=False):
     day_diff = diff.days
 
     if day_diff < 0:
-        return ''
+        return ""
 
     if day_diff == 0:
         if second_diff < 10:
@@ -42,15 +43,16 @@ def pretty_date(time=False):
         return str(day_diff / 30) + " months ago"
     return str(day_diff / 365) + " years ago"
 
+
 def get_ip(request):
-    peer_info = request.transport.get_extra_info('peername')
+    peer_info = request.transport.get_extra_info("peername")
 
     ip = "UNKNOWN"
 
     if peer_info is not None:
-        ip, port = peer_info
+        ip, port, _, _ = peer_info
 
-    if 'X-Forwarded-For' in request.headers:
-        ip = request.headers.get('X-Forwarded-For')
+    if "X-Forwarded-For" in request.headers:
+        ip = request.headers.get("X-Forwarded-For")
 
     return ip
